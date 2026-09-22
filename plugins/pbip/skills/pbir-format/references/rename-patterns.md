@@ -4,6 +4,9 @@
 > in PBIR report files that must be updated during table, column, or measure renames.
 > For the full rename cascade (including TMDL files), see the `pbip` skill's
 > `references/rename-cascade.md`.
+>
+> Use `pbir fields replace` or `pbir fields replace-table` for the mutation. The structures below
+> are diagnostic context, not a text-replacement checklist.
 
 Detailed documentation of the JSON structures found in Power BI Report files, focusing on patterns that contain table, column, and measure references.
 
@@ -18,7 +21,7 @@ Each visual is stored in its own `visual.json` file at:
 
 ```json
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.5.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.7.0/schema.json",
   "name": "<visualId>",
   "position": { "x": 0, "y": 0, "z": 0, "height": 200, "width": 300, "tabOrder": 0 },
   "visual": {
@@ -262,7 +265,7 @@ Each page has a `page.json` file at:
 
 ```json
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/1.2.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
   "name": "<pageId>",
   "displayName": "Page Title",
   "displayOption": "FitToPage",

@@ -2,6 +2,10 @@
 
 Detailed before/after examples for every location that must be updated when renaming tables, measures, or columns in a PBIP project.
 
+These examples explain what the validators cover. Do not perform the cascade with text
+replacement. Rename the model object with `te mv ... --save`, then repair reports with
+`pbir fields replace` or `pbir fields replace-table`.
+
 ## Table Rename Examples
 
 The examples below show renaming a table from `Customers` to `Customer`.
@@ -195,7 +199,86 @@ Conditional formatting rules embed `SourceRef.Entity` inside expression trees:
 
 ### Bookmark Filter Snapshots
 
-Bookmark JSON files (in `definition/bookmarks/`) contain filter state snapshots that include `Entity` references in their `From` arrays and expression trees. These follow the same `From[].Entity` and `SourceRef.Entity` patterns shown above and must also be updated during renames.
+Bookmark JSON files (in `definition/bookmarks/`) contain filter state snapshots. Each filter entry has **two** distinct `Entity` references that must both be updated:
+
+1. `filter.From[].Entity` — the aliased filter predicate
+2. `expression.Column.Expression.SourceRef.Entity` — the top-level expression field
+
+```json
+// Before (in .bookmark.json explorationState.filters.byExpr[])
+{
+  "expression": {
+    "Column": {
+      "Expression": {"SourceRef": {"Entity": "Customers"}},  // ← must update
+      "Property": "Account Name"
+    }
+  },
+  "filter": {
+    "Version": 2,
+    "From": [{"Name": "c", "Entity": "Customers", "Type": 0}],  // ← must update
+    "Where": [...]
+  }
+}
+
+// After (renaming Customers → Customer)
+{
+  "expression": {
+    "Column": {
+      "Expression": {"SourceRef": {"Entity": "Customer"}},
+      "Property": "Account Name"
+    }
+  },
+  "filter": {
+    "Version": 2,
+    "From": [{"Name": "c", "Entity": "Customer", "Type": 0}],
+    "Where": [...]
+  }
+}
+```
+
+### Bookmark Highlight Blocks
+
+Bookmarks may also contain `highlight` blocks with `dataMap` keys in `"Table.Column"` format that must be updated on table or column renames:
+
+```json
+// Before (in .bookmark.json explorationState.sections.<page>.visualContainers.<visual>)
+{
+  "highlight": {
+    "dataMap": {
+      "Customers.Key Account Name": {...},   // ← key string must update
+      "Sales.Revenue": {...}
+    },
+    "filterExpressionMetadata": {
+      "expressions": [{
+        "Column": {
+          "Expression": {"SourceRef": {"Entity": "Customers"}},  // ← must update
+          "Property": "Key Account Name"
+        }
+      }]
+    }
+  }
+}
+
+// After (renaming Customers → Customer)
+{
+  "highlight": {
+    "dataMap": {
+      "Customer.Key Account Name": {...},
+      "Sales.Revenue": {...}
+    },
+    "filterExpressionMetadata": {
+      "expressions": [{
+        "Column": {
+          "Expression": {"SourceRef": {"Entity": "Customer"}},
+          "Property": "Key Account Name"
+        }
+      }]
+    }
+  }
+}
+```
+
+Both `dataMap` key strings AND `filterExpressionMetadata.expressions[].Column.Expression.SourceRef.Entity` must be updated.
 
 ### SparklineData Metadata Selectors
 
@@ -438,6 +521,46 @@ measure '% Customer Growth' =
 { "entity": "Customer", "name": "# Active Customers" }
 ```
 
+## Sort Definitions
+
+`sortDefinition` blocks inside visual.json contain `SourceRef.Entity` references that must be updated during table or column renames. These are **commonly missed** because they live outside the `queryState` projections.
+
+```json
+// Before (in visual.json query.sortDefinition)
+"sortDefinition": {
+  "sort": [{
+    "field": {
+      "Measure": {
+        "Expression": {
+          "SourceRef": {"Entity": "Customers"}
+        },
+        "Property": "Revenue"
+      }
+    },
+    "direction": "Descending"
+  }],
+  "isDefaultSort": true
+}
+
+// After
+"sortDefinition": {
+  "sort": [{
+    "field": {
+      "Measure": {
+        "Expression": {
+          "SourceRef": {"Entity": "Customer"}
+        },
+        "Property": "Revenue"
+      }
+    },
+    "direction": "Descending"
+  }],
+  "isDefaultSort": true
+}
+```
+
+**Note:** `sortDefinition` does not use `queryRef` — only `SourceRef.Entity` and `Property`. Search for `"sortDefinition"` across all `visual.json` files to find every instance.
+
 ## Edge Cases
 
 ### Names with Special Characters
@@ -480,7 +603,7 @@ grep -r '"Entity": "Order"' --include="*.json"
 
 For large-scale renames (e.g., applying SQLBI naming conventions to all tables):
 
-1. Build a rename mapping (old name → new name)
-2. Sort by longest name first to avoid substring collisions
-3. Process one table at a time, running verification after each
-4. Use a script for consistency to avoid manual errors
+1. Build a rename mapping (old name → new name).
+2. Apply one model rename at a time with `te mv ... --save`.
+3. Apply the matching report rename with `pbir fields replace` or `replace-table`.
+4. Validate the semantic model and every affected report before the next rename.

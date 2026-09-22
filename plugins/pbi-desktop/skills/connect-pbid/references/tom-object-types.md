@@ -750,15 +750,17 @@ $model.DataSources.Remove($model.DataSources["Legacy SQL"])
 ```
 
 
-## Annotations (Custom Metadata)
+## Annotations, Extended Properties, and Field Parameters
+
+Basic CRUD for annotations is shown here. For comprehensive coverage including standard PBI annotations, Tabular Editor table groups, auto date/time control, field parameter creation, query groups, and custom tooling annotations, see **`references/annotations.md`**.
 
 ### Create
 
 ```powershell
 $ann = New-Object Microsoft.AnalysisServices.Tabular.Annotation
-$ann.Name = "PBI_Description"
-$ann.Value = "This measure tracks quarterly revenue"
-$model.Tables["Sales"].Measures["Total Revenue"].Annotations.Add($ann)
+$ann.Name = "TabularEditor_TableGroup"
+$ann.Value = "02. Fact Tables"
+$model.Tables["Sales"].Annotations.Add($ann)
 ```
 
 ### Read
@@ -772,13 +774,13 @@ foreach ($ann in $model.Tables["Sales"].Annotations) {
 ### Update
 
 ```powershell
-$model.Tables["Sales"].Annotations["PBI_Description"].Value = "Updated description"
+$model.Tables["Sales"].Annotations["TabularEditor_TableGroup"].Value = "01. Dimension Tables"
 ```
 
 ### Delete
 
 ```powershell
-$ann = $model.Tables["Sales"].Annotations["PBI_Description"]
+$ann = $model.Tables["Sales"].Annotations["TabularEditor_TableGroup"]
 $model.Tables["Sales"].Annotations.Remove($ann)
 ```
 
@@ -906,6 +908,65 @@ $model.Tables.Remove($model.Tables["Time Intelligence"])
 ```
 
 
+## KPIs
+
+Not worth implementing via TOM. KPI objects (`Measure.KPI`) attach goal/status/trend measures to a base measure for use in SSAS-era clients (Excel PivotTables, SSRS). They are unsupported or ignored by Power BI visuals and have no effect in modern report design. Use conditional formatting measures and visual calculations instead.
+
+---
+
+## Direct Lake Partitions
+
+Direct Lake is a Power BI / Fabric storage mode where the model reads directly from OneLake Delta tables without import. Direct Lake partitions use `EntityPartitionSource` instead of `MPartitionSource`.
+
+> **Note:** The TOM examples below apply when connected via the XMLA endpoint (e.g. Tabular Editor CLI or MCP server), not via PBI Desktop's local proxy. PBI Desktop's local Analysis Services instance does not expose Direct Lake databases to external connections; use the Tabular Editor CLI or a Power BI MCP server to work with Direct Lake models.
+
+### Read Direct Lake partition details
+
+```powershell
+foreach ($t in $model.Tables) {
+    foreach ($p in $t.Partitions) {
+        if ($p.Source -is [Microsoft.AnalysisServices.Tabular.EntityPartitionSource]) {
+            $src = [Microsoft.AnalysisServices.Tabular.EntityPartitionSource]$p.Source
+            Write-Output "[$($t.Name)] Direct Lake: Schema=$($src.SchemaName) Entity=$($src.EntityName)"
+        }
+    }
+}
+```
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `EntityName` | Delta table name in the lakehouse |
+| `SchemaName` | Schema (e.g. `dbo` for warehouse, empty for lakehouse) |
+| `ExpressionSource` | Named expression with the lakehouse connection |
+
+### Fallback mode
+
+Direct Lake models fall back to DirectQuery when a query can't be served from the in-memory cache. Check the fallback setting on the model:
+
+```powershell
+# DirectLakeBehavior: Automatic (default), DirectLakeOnly, DirectQueryOnly
+Write-Output "DirectLake fallback: $($model.DirectLakeBehavior)"
+# Set to prevent fallback (queries fail instead of falling back to DirectQuery)
+$model.DirectLakeBehavior = [Microsoft.AnalysisServices.Tabular.DirectLakeBehavior]::DirectLakeOnly
+$model.SaveChanges()
+```
+
+---
+
+## Export Model
+
+See **`references/export-model.md`** — covers export via Tabular Editor CLI (BIM + TMDL), `fab` CLI for Fabric-deployed models, and TOM `TmdlSerializer` for direct TMDL output.
+
+---
+
+## VertiPaq Statistics and Server Timings
+
+See **`references/vertipaq-stats.md`** — covers column cardinality, dictionary size, data size per column, total memory by table via `DISCOVER_STORAGE_TABLE_COLUMN_SEGMENTS`, and session-level query timings via `DISCOVER_SESSIONS`.
+
+---
+
 ## Saving All Changes
 
 After any combination of the above operations:
@@ -997,4 +1058,143 @@ foreach ($t in $model.Tables | Where-Object { -not $_.IsHidden }) {
         }
     }
 }
+```
+
+
+## User Defined Functions (DAX UDFs)
+
+DAX User Defined Functions allow reusable parameterized DAX expressions callable from measures. Requires compatibility level 1702+.
+
+> **Compatibility check:** UDFs require CL 1702+. Check before use:
+> ```powershell
+> if ($db.CompatibilityLevel -lt 1702) { Write-Output "UDFs not supported. CL: $($db.CompatibilityLevel)" }
+> ```
+
+> **TOM DLL version:** The `FunctionParameter` and `UserDefinedFunction` classes were added to TOM in later NuGet versions. If `New-Object Microsoft.AnalysisServices.Tabular.UserDefinedFunction` fails, update to a newer `ms-fabric-cli` NuGet package. Use reflection to verify:
+> ```powershell
+> [Microsoft.AnalysisServices.Tabular.Model].GetProperty('UserDefinedFunctions') -ne $null
+> ```
+
+> **Preview feature:** UDFs must be enabled in Power BI Desktop before use: **File > Options > Preview features > DAX user-defined functions**.
+
+### Parameter Types
+
+Each parameter has three optional hints: **type**, **subtype**, and **parameterMode**.
+
+**Type** — what the parameter accepts:
+
+| Type | Family | Description | TMDL keyword equivalent |
+|------|--------|-------------|------------------------|
+| `AnyVal` | Value | Any scalar or table (default if omitted) | `ANYVAL` |
+| `Scalar` | Value | Scalar value; add a subtype to narrow | (+ subtype, see below) |
+| `Table` | Value | Table value | — |
+| `AnyRef` | Expression | Any reference (lazy) | `EXPR` (approximate) |
+| `MeasureRef` | Expression | Measure reference (lazy) | `EXPR` |
+| `ColumnRef` | Expression | Column reference (lazy) | `COLUMN` |
+| `TableRef` | Expression | Table reference (lazy) | — |
+| `CalendarRef` | Expression | Calendar reference (lazy) | — |
+
+**Subtype** (only for `Scalar` type):
+
+| Subtype | TOM `DataType` | Description | TMDL equivalent |
+|---------|----------------|-------------|-----------------|
+| `Variant` | `Variant` | Any scalar | `ANYVAL` |
+| `Int64` | `Int64` | Whole number | `INT64` |
+| `Decimal` | `Decimal` | Fixed-precision decimal | — |
+| `Double` | `Double` | Floating-point decimal | — |
+| `Numeric` | `Double`/`Decimal`/`Int64` | Any number | `SCALAR NUMERIC` |
+| `String` | `String` | Text | `STRING` |
+| `DateTime` | `DateTime` | Date/time | — |
+| `Boolean` | `Boolean` | TRUE/FALSE | — |
+
+**ParameterMode:**
+
+| Mode | Evaluation | Use when |
+|------|-----------|----------|
+| `val` (default) | Eager — evaluated once before calling | Simple scalars, tables |
+| `expr` | Lazy — evaluated inside the function, in function's context | Measure refs, context-sensitive expressions |
+
+> **In TOM:** Scalar types map directly to `DataType` enum values. Expression types (`MeasureRef`, `ColumnRef`, etc.) do not use `DataType` — they require a `FunctionParameterType` property that may not be in older TOM assemblies. **Prefer authoring expression-type parameters in TMDL** (`tmdl` skill → `references/tmdl-file-examples.md`) and reading them back via TOM. See [MS Learn UDF docs](https://learn.microsoft.com/dax/best-practices/dax-user-defined-functions) for the canonical reference.
+
+### Create (scalar parameter example)
+
+```powershell
+$udf = New-Object Microsoft.AnalysisServices.Tabular.UserDefinedFunction
+$udf.Name = "BandValue"
+$udf.Description = "Bands a numeric value into Low / Medium / High"
+
+# Scalar numeric parameter
+$p1 = New-Object Microsoft.AnalysisServices.Tabular.FunctionParameter
+$p1.Name = "Value"
+$p1.DataType = [Microsoft.AnalysisServices.Tabular.DataType]::Double
+$udf.Parameters.Add($p1)
+
+$p2 = New-Object Microsoft.AnalysisServices.Tabular.FunctionParameter
+$p2.Name = "LowThreshold"
+$p2.DataType = [Microsoft.AnalysisServices.Tabular.DataType]::Double
+$udf.Parameters.Add($p2)
+
+$p3 = New-Object Microsoft.AnalysisServices.Tabular.FunctionParameter
+$p3.Name = "HighThreshold"
+$p3.DataType = [Microsoft.AnalysisServices.Tabular.DataType]::Double
+$udf.Parameters.Add($p3)
+
+# Body — parameters referenced with [@ParamName] syntax
+$udf.Expression = 'IF([@Value] < [@LowThreshold], "Low", IF([@Value] >= [@HighThreshold], "High", "Medium"))'
+
+$model.UserDefinedFunctions.Add($udf)
+$model.SaveChanges()
+```
+
+### Create (MeasureRef parameter — lazy expression)
+
+For `MeasureRef` / `ColumnRef` parameters, prefer TMDL authoring over TOM — the `FunctionParameterType` API for expression types is not reliably available in all TOM DLL versions. Author in `functions.tmdl` using the `tmdl` skill and let TOM read them back.
+
+If you need TOM: `DataType.Unknown` is the closest approximation for expression types, but behaviour may vary:
+
+```powershell
+$udf = New-Object Microsoft.AnalysisServices.Tabular.UserDefinedFunction
+$udf.Name = "TimeIntelligence.MTD"
+$udf.Description = "Wraps a measure reference in month-to-date CALCULATE"
+
+$p = New-Object Microsoft.AnalysisServices.Tabular.FunctionParameter
+$p.Name = "measureReference"
+# MeasureRef is a lazy expression type — DataType.Unknown is an approximation;
+# use TMDL authoring for reliable expression-type parameters
+$p.DataType = [Microsoft.AnalysisServices.Tabular.DataType]::Unknown
+$udf.Parameters.Add($p)
+
+$udf.Expression = 'CALCULATE([@measureReference], DATESMTD(''Date''[Date]))'
+
+$model.UserDefinedFunctions.Add($udf)
+$model.SaveChanges()
+```
+
+### Read
+
+```powershell
+foreach ($udf in $model.UserDefinedFunctions) {
+    Write-Output "UDF: [$($udf.Name)]"
+    foreach ($p in $udf.Parameters) {
+        Write-Output "  Param: $($p.Name) DataType=$($p.DataType)"
+    }
+    Write-Output "  Body: $($udf.Expression)"
+}
+```
+
+### Call in DAX
+
+```dax
+-- Scalar params: pass values directly
+EVALUATE ROW("Band", [BandValue](125, 100, 200))
+
+-- EXPR params: pass a measure reference
+EVALUATE ROW("MTD", [TimeIntelligence.MTD]([Total Revenue]))
+```
+
+### Delete
+
+```powershell
+$model.UserDefinedFunctions.Remove($model.UserDefinedFunctions["BandValue"])
+$model.SaveChanges()
 ```

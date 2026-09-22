@@ -72,6 +72,33 @@ Registers themes, images, and other static resources. Every custom theme and ima
 
 Item types: `"BaseTheme"`, `"CustomTheme"`, `"Image"`. See [images.md](./images.md) for image usage.
 
+### Custom Visual Registration
+
+A `visualType` set to a custom visual's GUID is inert on its own. Rendering requires a matching registration elsewhere AND the visual being installed/approved in the consuming environment.
+
+Three registration paths in `report.json` (schema `report/3.2.0`):
+
+```yaml
+publicCustomVisuals:
+  - array of GUID strings (AppSource visuals; code is NOT in the report; resolved at open time)
+organizationCustomVisuals:
+  - array of {name, path, disabled?} (org-store-approved references; admin-managed)
+resourcePackages:
+  - CustomVisualJavascript/Css/Screenshot items (private .pbiviz only; JS/CSS ship inside the report)
+CustomVisuals/ folder:
+  - metadata for private .pbiviz only; absent for AppSource/org-store visuals
+```
+
+**AppSource visual (hand-adding):** Set `visualType` to the GUID and append the same GUID to `publicCustomVisuals`. Without the `publicCustomVisuals` entry, the visual renders blank with no validation error.
+
+**Private `.pbiviz`:** Self-contained; JS/CSS ship via `resourcePackages` + `CustomVisuals/`. You cannot synthesize a private visual by hand-writing `resourcePackages`. Import once in Desktop, let it serialize the payload, then copy and edit.
+
+Pitfalls:
+- `visualType` GUID present but missing from `publicCustomVisuals` is the most common silent failure when copying a custom visual between reports
+- Copying a private-`.pbiviz` visual requires copying its `resourcePackages`/`CustomVisuals` payload too
+- `disabled: true` on an `organizationCustomVisuals` entry means the admin pulled the visual from the org store
+- AppSource/org-store visuals are unavailable in Power BI Report Server; private `.pbiviz` must be used there instead
+
 ### settings
 
 Report-wide behavioral settings. Values are bare (not wrapped in expr).
@@ -102,10 +129,15 @@ Key settings:
 
 ### objects
 
-Report-level formatting. Currently only `outspacePane` (filter pane visibility).
+Report-level formatting. Two valid properties: `outspacePane` (filter pane visibility) and `section` (canvas vertical alignment).
 
 ```json
 "objects": {
+  "section": [{
+    "properties": {
+      "verticalAlignment": {"expr": {"Literal": {"Value": "'Middle'"}}}
+    }
+  }],
   "outspacePane": [{
     "properties": {
       "visible": {"expr": {"Literal": {"Value": "false"}}},
@@ -114,6 +146,8 @@ Report-level formatting. Currently only `outspacePane` (filter pane visibility).
   }]
 }
 ```
+
+`section.verticalAlignment` values: `'Top'`, `'Middle'`, `'Bottom'`. Sets the default canvas alignment for all pages.
 
 **CRITICAL:** At report level, ONLY `visible` and `expanded` work on outspacePane. Styling properties (backgroundColor, width, etc.) must be in the theme JSON. Putting them here causes deployment errors.
 
@@ -136,9 +170,12 @@ Report-level filters that apply to all pages. See [filter-pane.md](./filter-pane
       "isHiddenInViewMode": false,
       "isLockedInViewMode": false
     }
-  ]
+  ],
+  "filterSortOrder": "Custom"
 }
 ```
+
+`filterSortOrder`: controls filter pane sort order. `"Custom"` preserves the `ordinal` field ordering; omit to use the default sort.
 
 ### annotations
 

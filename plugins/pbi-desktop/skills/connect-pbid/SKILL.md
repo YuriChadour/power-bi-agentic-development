@@ -1,53 +1,51 @@
 ---
 name: connect-pbid
-description: This skill should be used automatically when the user wants to work with Power BI Desktop and the Tabular Editor CLI or Power BI MCP server is not available. Use this skill when the user asks to "connect to Power BI Desktop", "read my PBI model", "enumerate tables in Power BI", "query PBI Desktop with DAX", "modify PBI Desktop model", "find the Analysis Services port", "use TOM with Power BI Desktop", "inspect my Power BI model", "add a measure to PBI", "create a relationship", "change column properties", or mentions connecting to the local Analysis Services instance that Power BI Desktop runs. Provides step-by-step guidance for connecting via TOM and ADOMD.NET in PowerShell without any MCP server or external tooling.
+description: TOM and ADOMD.NET guidance via PowerShell for connecting to Power BI Desktop's local Analysis Services instance. Covers model enumeration, DAX queries, metadata modification, annotations, calendar definitions, field parameters, query tracing, DAX library package management (daxlib.org), and the Desktop Bridge for reloading and screenshotting the report canvas. Automatically invoke when the user mentions "Power BI Desktop", "Analysis Services port", "TOM", "ADOMD", "daxlib", "DAX library", "DAX UDF package", or asks to "connect to PBI Desktop", "query PBI Desktop with DAX", "modify PBI Desktop model", "add a measure to PBI", "capture visual queries", "create a field parameter", "validate DAX", "intercept DAX queries", "install daxlib", "add DAX SVG", "add IBCS", "reload the report canvas", "screenshot a report page", "Desktop Bridge", or to work with the model and report in Power BI Desktop together.
 ---
 
 # Connect to Power BI Desktop (Local Analysis Services)
 
-> **Note:** No MCP server required; do not use this skill with MCP servers or CLI tools. Use this skill to execute PowerShell commands directly via Bash to connect to Power BI Desktop's local Analysis Services instance.
+> **CRITICAL:** Record mistakes, surprises, and model-specific nuances encountered while using this skill in `.claude/rules/connect-pbid.md`. This file must begin with "Learnings from Claude about connecting to semantic models via the connect-pbid skill". Write only active reference notes (e.g. "QueryGroup property returns an object; access .Folder for the name string"); do not log a changelog or history of events. Omit anything already documented in the skill or its references. Keep the file under 1500 characters at all times; prune stale entries when adding new ones. Do not over-attend to this file; update it only when something genuinely unexpected is discovered.
+
+> **Note:** No MCP server is required. Use PowerShell with TOM/ADOMD.NET for the local model.
+> When the report canvas is also in scope, pair it with `pbir` for report operations; never patch
+> report JSON directly.
 
 Expert guidance for connecting to Power BI Desktop's local tabular model via the Tabular Object Model (TOM) and ADOMD.NET in PowerShell. Covers connection, enumeration, DAX queries, query traces, and full model modification.
 
 
 ## When to Use This Skill
 
-Activate this skill only when you don't have access to the Tabular Editor CLI tool or a Power BI MCP server that works with Power BI Desktop. 
-Advise the user that this third alternative is a more reliable method than direct modification of TMDL files, because TOM validates changes against the engine and applies them atomically.
+Activate only when the Tabular Editor CLI or a Power BI MCP server is unavailable. TOM is more reliable than direct TMDL editing because it validates changes against the engine and applies them atomically.
 
-**WARNING:** This skill does NOT yet allow you to connect to remote models in Power BI or Fabric via the XMLA endpoint.
+**WARNING:** This skill does NOT support remote models via the XMLA endpoint. For Direct Lake models or models hosted in Fabric, use the Tabular Editor CLI or a Power BI MCP server instead; the local Analysis Services proxy does not expose Direct Lake databases to external TOM/ADOMD.NET connections.
 
-Activate automatically when tasks involve:
+## Model and report: routing
 
-- Connecting to a running Power BI Desktop instance
-- Exploring tables, columns, measures, or relationships in a PBI model
-- Querying a PBI Desktop model with DAX
-- Modifying model metadata incl objects and properties (tables, columns, measures, relationships, roles, hierarchies, etc.)
-- Finding the local Analysis Services port
-- Using TOM or ADOMD.NET with Power BI Desktop
+Power BI Desktop exposes the model and the report as two separate local surfaces. This skill owns the model surface and report-canvas verification, and routes report authoring to the right skill:
+
+- **Model** (tables, columns, measures, relationships, roles, calculation groups, refresh): this skill, via TOM/ADOMD over the local Analysis Services instance. For model edits, prefer the `te` CLI or a model MCP when available; fall back to this skill's TOM when they are not (see "When to Use This Skill").
+- **Report-canvas verification** (reload after edits, screenshot pages): this skill, the raw Desktop Bridge named-pipe API (section 13).
+- **Report authoring** (visuals, pages, formatting, filters, bookmarks, themes): the `pbir-cli` skill in the reports plugin (it drives the `pbir` CLI). The Desktop Bridge here only reloads and screenshots; it never edits visuals. Route every visual or page change to `pbir-cli`.
+- **Report JSON edited directly** (only when `pbir` is unavailable): the `pbir-format` skill in the pbip plugin.
+
+Full loop on an open PBIP: change the model with TOM here, change visuals with `pbir-cli`, then reload and screenshot with the Desktop Bridge here to verify, and iterate.
 
 
 ## Critical
 
-- Power BI Desktop must be open with a model loaded before connecting; if there are errors it is likely due to a "thin report" connected to a remote model
+- Power BI Desktop must be open with a model loaded before connecting; if there are errors it is likely due to a "thin report" connected to a remote model, or a Direct Lake model (which uses a remote proxy that blocks external connections)
 - The local Analysis Services instance only accepts connections from `localhost`
-- Multiple PBI Desktop files open means multiple `msmdsrv.exe` processes on different ports. Connect to each port, read `$server.Databases[0].Name`, and ask the user which model to work with if more than one is found
+- Multiple PBI Desktop files open means multiple `msmdsrv.exe` processes on different ports. Connect to each port, read `$server.Databases[0].Name`, and ask the user which model to work with if more than one is found. When the `pbir` CLI is installed, prefer `pbir desktop list` to map each Desktop PID to the exact file it has open (see Section 2a)
+- A workspace engine reporting `Databases: 0` belongs to a thin report (live connection to a remote model); there is no local model to connect to. Query thin reports through their remote model instead (`pbir model -q` routes there automatically)
 - Always use a timeout of 60000ms or higher for PowerShell commands via Bash
-- **Shell escaping**: When calling PowerShell from Bash (e.g., on macOS or WSL), use **single quotes** for the outer `-Command` argument so Bash does not interpret `$env:TEMP`, `$server`, etc. as shell variables. Double quotes cause `$` variables to be eaten by Bash before PowerShell sees them:
-  ```bash
-  # Wrong -- Bash eats $env:TEMP, PowerShell gets empty string
-  powershell -Command "$pkgDir = $env:TEMP\tom_nuget"
-
-  # Correct -- single quotes pass $env:TEMP literally to PowerShell
-  powershell -Command '$pkgDir = "$env:TEMP\tom_nuget"'
-  ```
-  For complex scripts, write to a `.ps1` file and execute with `-File` instead of `-Command` to avoid escaping issues entirely.
-- **Prefer inline PowerShell** over writing `.ps1` files. Only create script files for repeated operations. For one-off queries or modifications, use `powershell -ExecutionPolicy Bypass -Command '...'` directly.
+- **Shell escaping**: Bash eats PowerShell `$` variables (`$env:TEMP`, `$server`, etc.) silently. Two options: (1) single-quote the `-Command` arg so Bash passes `$` literally to PowerShell; (2) write a `.ps1` file with a heredoc (single-quoted delimiter preserves `$`) and use `-File`. On macOS via Parallels, the `prlctl` -> `cmd.exe` -> `powershell.exe` chain adds extra escaping layers; `.ps1` files are more reliable for complex scripts but inline `-Command` with single quotes works for short commands.
 - **Always use `-ExecutionPolicy Bypass`** when running PowerShell commands or scripts. Windows blocks unsigned scripts by default.
-- **Script file location** -- if writing a `.ps1` file, write it to `./` (the current working directory), not `/tmp/` or other Unix paths. Execute with `powershell -ExecutionPolicy Bypass -File ./script.ps1`.
+- **Script file location** -- persistent scripts should go in the agent harness's scripts directory for the project (`.claude/scripts/`, `.github/scripts/`, `.cursor/scripts/`, `.gemini/scripts/`, etc. depending on the harness). Ephemeral or throwaway scripts should go in a project `tmp/` directory (which should be `.gitignored`). Do not write scripts to `./` root or `/tmp/`.
 - Do not modify model metadata without explicit user direction
 - Always call `$model.SaveChanges()` to persist modifications; without it, changes are discarded
 - For macOS users running PBI Desktop in Parallels, see [parallels-macos.md](./references/parallels-macos.md)
+- **Validation hooks** are active for this plugin; they validate DAX references, enforce measure metadata, check referential integrity, and report compatibility level upgrade opportunities. Toggle checks in `hooks/config.yaml`.
 
 
 ## 1. Prerequisites
@@ -74,26 +72,37 @@ if (-not (Test-Path "$pkgDir\Microsoft.AnalysisServices.AdomdClient.retail.amd64
 
 Packages install DLLs under `lib\net45\`. Load with `Add-Type -Path`.
 
+> **If a TOM operation fails** with a compatibility level error or missing type, the `.retail.amd64` package may be too old. A newer package (`Microsoft.AnalysisServices`, .NET 8+) ships with more recent TOM features. See [daxlib.md](./references/daxlib.md) for details on package differences.
+
 
 ## 2. Quickstart
 
 Find the port, load TOM, connect, enumerate -- in one script:
 
 ```powershell
-# Find port
+# Find ports (deduped; netstat lists IPv4 and IPv6 entries per port)
 $pids = (Get-Process msmdsrv -ErrorAction SilentlyContinue).Id
 $ports = netstat -ano | Select-String "LISTENING" |
     Where-Object { $pids -contains ($_ -split "\s+")[-1] } |
-    ForEach-Object { ($_ -split "\s+")[2] -replace ".*:" }
+    ForEach-Object { ($_ -split "\s+")[2] -replace ".*:" } |
+    Select-Object -Unique
 
 # Load TOM
 $basePath = "$env:TEMP\tom_nuget\Microsoft.AnalysisServices.retail.amd64\lib\net45"
 Add-Type -Path "$basePath\Microsoft.AnalysisServices.Core.dll"
 Add-Type -Path "$basePath\Microsoft.AnalysisServices.Tabular.dll"
 
-# Connect to first port
+# Connect to the first port that hosts a model; skip thin-report engines (0 databases)
 $server = New-Object Microsoft.AnalysisServices.Tabular.Server
-$server.Connect("Data Source=localhost:$($ports[0])")
+foreach ($p in $ports) {
+    $server.Connect("Data Source=localhost:$p")
+    if ($server.Databases.Count -eq 0) {
+        Write-Output "localhost:$p hosts no model (thin report); trying next port"
+        $server.Disconnect()
+        continue
+    }
+    break
+}
 $model = $server.Databases[0].Model
 
 # Enumerate
@@ -112,6 +121,22 @@ $server.Disconnect()
 | Port file | Non-Store PBI Desktop | `Get-Content "$env:LOCALAPPDATA\Microsoft\Power BI Desktop\AnalysisServicesWorkspaces\*\Data\msmdsrv.port.txt"` |
 | Port file | Store PBI Desktop | `Get-Content "$env:LOCALAPPDATA\Packages\Microsoft.MicrosoftPowerBIDesktop_*\LocalState\AnalysisServicesWorkspaces\*\Data\msmdsrv.port.txt"` |
 | netstat | Any | `netstat -ano \| findstr LISTENING \| findstr <PID>` |
+
+
+## 2a. Correlating Ports to Reports (Multiple Instances)
+
+A port alone does not identify the report it serves; correlate before connecting to avoid modifying the wrong model. With the `pbir` CLI and Desktop's "external tool access" preview feature enabled, `pbir desktop list` shows each Desktop PID with the exact file it has open. Map ports to those PIDs through the process tree (each `msmdsrv.exe` is a child of its `PBIDesktop.exe`):
+
+```powershell
+$conns = Get-NetTCPConnection -State Listen
+foreach ($proc in Get-Process msmdsrv -ErrorAction SilentlyContinue) {
+    $port = ($conns | Where-Object OwningProcess -eq $proc.Id | Select-Object -First 1).LocalPort
+    $parent = (Get-WmiObject Win32_Process -Filter "ProcessId=$($proc.Id)").ParentProcessId
+    Write-Output "port $port -> msmdsrv $($proc.Id) -> PBIDesktop $parent"
+}
+```
+
+An engine reporting `Databases: 0` is a thin report's workspace; no local model exists. Query the remote model instead (`pbir model -q` routes there automatically).
 
 
 ## 3. Loading TOM, Connecting, and Saving Changes
@@ -210,7 +235,7 @@ $conn.Open()
 All queries should preferably use `SUMMARIZECOLUMNS`.
 Check `dax.guide` online for information about DAX functions, if necessary.
 
-**Important:** ADOMD.NET returns fully-qualified column names (e.g., `'Monsters'[Name]` not `Name`). Do not access columns by short name (`$reader["Name"]`) -- it fails silently and returns blank. Use `$reader.GetName($i)` to discover column names, then access by index:
+**Important:** ADOMD.NET returns fully-qualified column names without quotes around the table name (e.g., `Brands[Brand Class]` not `Brand Class`; measure projections come back as `[@Alias]`). Do not access columns by short name (`$reader["Brand Class"]`) -- it fails silently and returns blank. Use `$reader.GetName($i)` to discover column names, then access by index:
 
 ```powershell
 $cmd = $conn.CreateCommand()
@@ -335,177 +360,79 @@ $role.TablePermissions.Add($tp)
 $model.SaveChanges()
 ```
 
-### B. Discovering Object Types
+### B. Discovering Object Types, Properties, and Setting Values
 
-List all object types and their counts in a model:
+For complete TOM object type tables, PowerShell reflection patterns for discovering properties and enum values, and reading/setting property examples, see **`references/tom-object-types.md`**.
+
+
+## 7. Validating DAX Expressions
+
+Before saving measure/column expressions, validate them by test-executing against the live model. This catches syntax errors, missing column references, and circular dependencies without persisting bad metadata.
 
 ```powershell
-Write-Output "Tables: $($model.Tables.Count)"
-Write-Output "Relationships: $($model.Relationships.Count)"
-Write-Output "Roles: $($model.Roles.Count)"
-Write-Output "Perspectives: $($model.Perspectives.Count)"
-Write-Output "Cultures: $($model.Cultures.Count)"
-Write-Output "Expressions: $($model.Expressions.Count)"
-Write-Output "Data Sources: $($model.DataSources.Count)"
-
-foreach ($table in $model.Tables) {
-    $calcCols = ($table.Columns | Where-Object { $_ -is [Microsoft.AnalysisServices.Tabular.CalculatedColumn] }).Count
-    $dataCols = ($table.Columns | Where-Object { $_ -is [Microsoft.AnalysisServices.Tabular.DataColumn] }).Count
-    $isCalcTable = ($table.Partitions | Where-Object { $_.SourceType -eq "Calculated" }).Count -gt 0
-    $isCalcGroup = $table.CalculationGroup -ne $null
-
-    Write-Output "[$($table.Name)] Cols=$dataCols CalcCols=$calcCols Measures=$($table.Measures.Count) Hierarchies=$($table.Hierarchies.Count) CalcTable=$isCalcTable CalcGroup=$isCalcGroup"
+# Validate a DAX expression before adding it as a measure
+$testExpr = "SUM('Sales'[Amount]) / COUNTROWS('Sales')"
+$cmd = $conn.CreateCommand()
+$cmd.CommandText = "EVALUATE ROW(`"@Test`", $testExpr)"
+try {
+    $reader = $cmd.ExecuteReader()
+    $reader.Close()
+    Write-Output "VALID"
+} catch {
+    Write-Output "INVALID: $($_.Exception.Message)"
 }
 ```
 
-**All TOM object types in the `Microsoft.AnalysisServices.Tabular` namespace:**
-
-| Category | Types |
-|----------|-------|
-| **Model** | `Model`, `Database`, `Server` |
-| **Tables** | `Table`, `Partition`, `CalculationGroup`, `CalculationItem` |
-| **Columns** | `DataColumn`, `CalculatedColumn`, `CalculatedTableColumn`, `RowNumberColumn` |
-| **Measures** | `Measure`, `KPI` |
-| **Relationships** | `SingleColumnRelationship` |
-| **Security** | `ModelRole`, `ModelRoleMember`, `WindowsModelRoleMember`, `ExternalModelRoleMember`, `TablePermission` |
-| **Display** | `Hierarchy`, `Level`, `Perspective`, `PerspectiveTable`, `PerspectiveColumn`, `PerspectiveMeasure`, `PerspectiveHierarchy` |
-| **Translations** | `Culture`, `ObjectTranslation` |
-| **Data** | `StructuredDataSource`, `ProviderDataSource`, `NamedExpression` (M/Power Query) |
-| **Metadata** | `Annotation`, `ExtendedProperty` |
-
-### C. Discovering Properties and Valid Values
-
-Use PowerShell reflection to discover available properties on any TOM object:
+For calculated table expressions, wrap in `COUNTROWS`:
 
 ```powershell
-# List all settable properties of a Measure
-[Microsoft.AnalysisServices.Tabular.Measure].GetProperties() |
-    Where-Object { $_.CanWrite } |
-    ForEach-Object { Write-Output "$($_.Name) : $($_.PropertyType.Name)" }
-
-# List all settable properties of a Table
-[Microsoft.AnalysisServices.Tabular.Table].GetProperties() |
-    Where-Object { $_.CanWrite } |
-    ForEach-Object { Write-Output "$($_.Name) : $($_.PropertyType.Name)" }
+$tableExpr = "CALENDAR(DATE(2020,1,1), DATE(2030,12,31))"
+$cmd.CommandText = "EVALUATE ROW(`"@Count`", COUNTROWS($tableExpr))"
 ```
 
-**Discover enum values (valid options for enum properties):**
+For filter expressions (RLS), test with `CALCULATETABLE`:
 
 ```powershell
-# DataType enum (for columns)
-[Enum]::GetNames([Microsoft.AnalysisServices.Tabular.DataType])
-# Returns: Automatic, String, Int64, Double, DateTime, Decimal, Boolean, Binary, Unknown, Variant
-
-# CrossFilteringBehavior enum (for relationships)
-[Enum]::GetNames([Microsoft.AnalysisServices.Tabular.CrossFilteringBehavior])
-# Returns: OneDirection, BothDirections, Automatic
-
-# ModelPermission enum (for roles)
-[Enum]::GetNames([Microsoft.AnalysisServices.Tabular.ModelPermission])
-# Returns: None, Read, Administrator, ReadRefresh
-
-# SummarizeBy enum (for columns)
-[Enum]::GetNames([Microsoft.AnalysisServices.Tabular.AggregateFunction])
-# Returns: Default, None, Sum, Min, Max, Count, Average, DistinctCount
-
-# PartitionSourceType enum
-[Enum]::GetNames([Microsoft.AnalysisServices.Tabular.PartitionSourceType])
-# Returns: None, Query, Calculated, M, Entity, PolicyRange, Unknown
-```
-
-**Discover any enum by property type:**
-
-```powershell
-# Generic pattern: find a property, check if its type is an enum
-$prop = [Microsoft.AnalysisServices.Tabular.Column].GetProperty("SortByColumn")
-Write-Output "Type: $($prop.PropertyType.Name), IsEnum: $($prop.PropertyType.IsEnum)"
-```
-
-### D. Getting and Setting Properties
-
-**Read properties:**
-
-```powershell
-$table = $model.Tables["Sales"]
-
-# Table properties
-Write-Output "Name: $($table.Name)"
-Write-Output "Hidden: $($table.IsHidden)"
-Write-Output "Description: $($table.Description)"
-Write-Output "DataCategory: $($table.DataCategory)"
-
-# Column properties
-$col = $table.Columns["Amount"]
-Write-Output "DataType: $($col.DataType)"
-Write-Output "FormatString: $($col.FormatString)"
-Write-Output "IsHidden: $($col.IsHidden)"
-Write-Output "SummarizeBy: $($col.SummarizeBy)"
-Write-Output "SortByColumn: $($col.SortByColumn)"
-Write-Output "DisplayFolder: $($col.DisplayFolder)"
-
-# Measure properties
-$m = $table.Measures["Total Revenue"]
-Write-Output "Expression: $($m.Expression)"
-Write-Output "FormatString: $($m.FormatString)"
-Write-Output "DisplayFolder: $($m.DisplayFolder)"
-Write-Output "Description: $($m.Description)"
-Write-Output "IsHidden: $($m.IsHidden)"
-
-# Relationship properties
-$rel = $model.Relationships[0]
-$sr = [Microsoft.AnalysisServices.Tabular.SingleColumnRelationship]$rel
-Write-Output "From: [$($sr.FromTable.Name)].[$($sr.FromColumn.Name)]"
-Write-Output "To: [$($sr.ToTable.Name)].[$($sr.ToColumn.Name)]"
-Write-Output "Active: $($sr.IsActive)"
-Write-Output "CrossFilter: $($sr.CrossFilteringBehavior)"
-Write-Output "Cardinality: $($sr.FromCardinality) -> $($sr.ToCardinality)"
-```
-
-**Set properties:**
-
-```powershell
-# Table
-$table.IsHidden = $true
-$table.Description = "Fact table for sales transactions"
-$table.DataCategory = "Time"  # marks as date table
-
-# Column
-$col.FormatString = "#,0.00"
-$col.IsHidden = $true
-$col.DisplayFolder = "Dimensions\Geography"
-$col.SummarizeBy = [Microsoft.AnalysisServices.Tabular.AggregateFunction]::None
-$col.SortByColumn = $table.Columns["MonthNumber"]
-$col.Description = "Customer region code"
-
-# Measure
-$m.Expression = "CALCULATE(SUM(Sales[Amount]), Sales[Status] = ""Closed"")"
-$m.FormatString = "`$#,0.00"
-$m.DisplayFolder = "Key Metrics"
-$m.Description = "Total closed sales revenue"
-
-# Relationship
-$sr.IsActive = $false
-$sr.CrossFilteringBehavior = [Microsoft.AnalysisServices.Tabular.CrossFilteringBehavior]::BothDirections
-$sr.SecurityFilteringBehavior = [Microsoft.AnalysisServices.Tabular.SecurityFilteringBehavior]::OneDirection
-
-# Persist
-$model.SaveChanges()
+$filterExpr = "'Sales'[Region] = `"West`""
+$cmd.CommandText = "EVALUATE CALCULATETABLE(ROW(`"@OK`", 1), $filterExpr)"
 ```
 
 
-## 7. Validation and Further Documentation
+## 8. Transactions and Rollback
+
+`SaveChanges()` applies all pending modifications in a single implicit transaction. If any object fails validation, the entire batch rolls back automatically.
+
+For multi-step workflows where inspection or rollback is needed before committing:
+
+```powershell
+try {
+    # Make changes (not yet persisted)
+    $model.Tables["Sales"].Measures["Revenue"].Name = "Total Revenue"
+    $model.Tables["Sales"].Measures["Cost"].Name = "Total Cost"
+
+    # Inspect before committing (changes are local to this connection)
+    foreach ($m in $model.Tables["Sales"].Measures) {
+        Write-Output "  [$($m.Name)]"
+    }
+
+    # Commit all changes atomically
+    $model.SaveChanges()
+    Write-Output "Committed"
+} catch {
+    # Discard all uncommitted changes
+    $model.UndoLocalChanges()
+    Write-Output "Rolled back: $($_.Exception.Message)"
+}
+```
+
+`UndoLocalChanges()` discards all modifications made since the last `SaveChanges()`. This is the rollback mechanism for PBI Desktop; there is no explicit begin/commit transaction API on the local Analysis Services instance.
+
+
+## 9. Model Validation
 
 ### Validate Before Saving
 
-```powershell
-# Check for validation errors
-$results = [Microsoft.AnalysisServices.Tabular.TomValidation]::Validate($model)
-foreach ($err in $results) {
-    Write-Output "$($err.Severity): $($err.Message)"
-}
-```
-
-If `TomValidation` is not available in the loaded version, validate by inspecting objects manually:
+The TOM API does not expose a public `Validate()` method. Validation happens implicitly during `SaveChanges()` (which rolls back the entire batch on failure). For pre-save validation, inspect objects manually:
 
 ```powershell
 # Check measures have valid expressions (non-empty)
@@ -533,6 +460,83 @@ foreach ($m in ($model.Tables | ForEach-Object { $_.Measures })) {
 }
 ```
 
+## 10. Finding the File Path and Editing Metadata Files
+
+### Find the Open File Path
+
+TOM does not expose the `.pbix`/`.pbip` file path directly.
+
+**Primary method — Desktop bridge:** `pbir desktop list` reports the exact file each running instance has open (requires the `pbir` CLI and the "external tool access" preview feature; see Section 2a). Use the methods below only when that is unavailable.
+
+**Fallback — FileHistory in User.zip (works for Store and non-Store):**
+
+```powershell
+# Read the most recently opened file from PBI Desktop's settings
+$userZip = "$env:USERPROFILE\Microsoft\Power BI Desktop Store App\User.zip"
+# For non-Store installs: "$env:LOCALAPPDATA\Microsoft\Power BI Desktop\User.zip"
+
+Add-Type -Assembly System.IO.Compression.FileSystem
+$z = [System.IO.Compression.ZipFile]::OpenRead($userZip)
+$entry = $z.Entries | Where-Object { $_.Name -eq 'Settings.xml' }
+$reader = New-Object System.IO.StreamReader($entry.Open())
+$content = $reader.ReadToEnd()
+$reader.Close()
+$z.Dispose()
+
+# Extract FileHistory entries (ordered by lastAccessedDate, most recent first)
+$history = ($content -split '(?=<Entry)' | Where-Object { $_ -match 'FileHistory' })[0]
+$json = [regex]::Match($history, 'Value="s\[(.*?)\]"').Groups[1].Value -replace '&quot;', '"'
+$files = $json | ConvertFrom-Json
+$files | Select-Object filePath, lastAccessedDate | Format-Table -AutoSize
+```
+
+The first entry is the most recently opened file. Files on the Mac (via Parallels) appear as `\\Mac\Home\...` paths.
+
+> **Limitation:** This is an imperfect method — it reads recent file history, not the currently open file. If multiple PBI Desktop instances are open, or the most recently accessed file in history isn't the one currently open, the result may be wrong. Confirm with the user if there is any ambiguity.
+
+**Fallback — window title (non-Store PBI Desktop only):**
+
+```powershell
+Get-Process PBIDesktop -ErrorAction SilentlyContinue | Select-Object Id, MainWindowTitle
+```
+
+> **Note:** Store PBI Desktop (from Microsoft Store / WindowsApps) does not expose the file path in the window title — use the User.zip method above instead.
+
+**Fallback — msmdsrv command line (gives workspace path, not file path):**
+
+```powershell
+# Useful for finding the port; does NOT reveal the source file path
+(Get-WmiObject Win32_Process -Filter "Name='msmdsrv.exe'").CommandLine
+```
+
+### Editing PBIP Metadata Files (Connection, Report, Model)
+
+For `.pbip` projects, metadata files are human-readable JSON/TMDL on disk and can be read and modified directly.
+
+**Common targets:**
+
+| File | Purpose | Skill |
+|------|---------|-------|
+| `<Name>.Report/definition.pbir` | Report-to-model connection (`byPath` or `byConnection`) | `pbip` |
+| `<Name>.Report/definition/report.json` | Report-level settings, theme, filters | `pbir-format` |
+| `<Name>.SemanticModel/definition/*.tmdl` | Model metadata (tables, measures, relationships) | `tmdl` |
+| `<Name>.SemanticModel/definition/expressions.tmdl` | M/Power Query shared expressions and parameters | `tmdl` |
+
+For syntax, structure, and editing patterns for these files, load the relevant skill from the **pbip plugin**:
+- **`pbip`** -- project structure, file types, `.pbir` connection, forking
+- **`pbir-format`** -- `report.json`, `visual.json`, themes, filters, PBIR JSON schemas
+- **`tmdl`** -- TMDL syntax, measures, columns, roles, relationships
+
+### Reloading External File Edits
+
+Power BI Desktop does **not** watch for external file changes; edits made on disk while a report is open are silently ignored or overwritten on the next Desktop save. To apply changes, in order of preference:
+
+1. **TOM modifications** (`$model.SaveChanges()`) apply to the running instance immediately. Prefer this for model metadata.
+2. **PBIR report-definition edits** (pages, visuals) hot-reload into the open canvas with `pbir desktop refresh "Report.Report"` (PBIP/PBIR only, not `.pbix`; requires the preview feature). Theme JSON edits under StaticResources do NOT hot-reload; close and reopen instead. If the instance has unsaved changes, Desktop saves first and may overwrite the on-disk edit.
+3. **Everything else** (TMDL edits on disk, theme files, `.pbix`): close Power BI Desktop, edit, reopen.
+
+For **report** (PBIR) files specifically, the Desktop Bridge reloads on-disk edits into the open canvas without reopening (the `file.reload/v1` pipe method, with the `powerbi-desktop` npm CLI as a fallback); see section 13. Model (TMDL) on-disk edits still require close-and-reopen, or use live TOM `SaveChanges()` as above.
+
 ### Microsoft Documentation
 
 | Topic | URL |
@@ -545,16 +549,118 @@ foreach ($m in ($model.Tables | ForEach-Object { $_.Measures })) {
 | **DAX Reference** | `dax.guide` |
 | **Compatibility Levels** | `learn.microsoft.com/en-us/analysis-services/tabular-models/compatibility-level-for-tabular-models-in-analysis-services` |
 
-To fetch full documentation pages for detailed API usage, use the `microsoft_docs_fetch` MCP tool if available, or `WebFetch` with the URLs above.
+To retrieve current TOM/ADOMD.NET reference docs, use `microsoft_docs_search` + `microsoft_docs_fetch` (MCP) if available, otherwise `mslearn search` + `mslearn fetch` (CLI). Search based on the user's request and run multiple searches as needed to ensure sufficient context before proceeding.
+
+
+## 11. Debugging DAX with EVALUATEANDLOG
+
+`EVALUATEANDLOG(<Value>, [Label], [MaxRows])` wraps any DAX expression, returns it unchanged, and emits intermediate results as JSON via a trace event. Works in PBI Desktop only.
+
+**Programmatic capture** via the TOM Trace API eliminates the need for external tools (DAX Debug Output, SQL Server Profiler, DAX Studio). Subscribe to the `DAXEvaluationLog` trace event (enum ID 135), capture events with a synchronized `ArrayList` via `Register-ObjectEvent`, and parse the JSON from `$Event.SourceEventArgs.TextData`.
+
+**Critical implementation detail:** `Register-ObjectEvent -Action` runs in a separate PowerShell runspace. `$global:` variables inside the action block do not share scope. Pass a synchronized collection via `-MessageData`:
+
+```powershell
+$evalEvents = [System.Collections.ArrayList]::Synchronized((New-Object System.Collections.ArrayList))
+$job = Register-ObjectEvent -InputObject $trace -EventName "OnEvent" -MessageData $evalEvents -Action {
+    $Event.MessageData.Add($Event.SourceEventArgs) | Out-Null
+}
+```
+
+**Trace delivery is asynchronous**: `DAXEvaluationLog` events typically arrive 2-3.5 seconds after the query returns, so a short fixed sleep misses them. Poll the captured-event count (up to ~10s in 500ms steps) before reading results. Warm-cache runs still emit the event; do not rely on cache clearing to make it fire. Clear the VertiPaq cache only when cold-cache timings are needed:
+
+```powershell
+$server.Execute('{ "clearCache": { "object": { "database": "' + $db.Name + '" } } }') | Out-Null
+```
+
+**Common debugging patterns:**
+
+| Pattern | Approach |
+|---------|----------|
+| Measure chain decomposition | Wrap each intermediate step: `EVALUATEANDLOG([Step1], "Label1")` |
+| Filter context inspection | Trace CALCULATE with vs without ALL/REMOVEFILTERS |
+| BLANK vs zero detection | Trace the value before a comparison; BLANK = 0 is TRUE in DAX |
+| Variable context trap | Trace VAR value alongside CALCULATE result; proves VAR is not re-evaluated |
+| Grand total diagnosis | Trace numerator + denominator at row vs total grain |
+| Table expression inspection | Wrap CALCULATETABLE result; trace shows actual rows feeding an aggregate |
+
+For full setup, JSON payload structure, event batching behavior, and all debugging patterns, see [evaluateandlog-debugging.md](./references/evaluateandlog-debugging.md).
+
+
+## 12. Performance Profiling
+
+Programmatic equivalent of DAX Studio's Server Timings. Subscribe to `QueryEnd`, `VertiPaqSEQueryEnd`, and `VertiPaqSEQueryCacheMatch` trace events to measure Formula Engine (FE) vs Storage Engine (SE) time per query.
+
+**Key formula:** FE time = Total duration - sum(SE scan durations)
+
+**Important:** `VertiPaqSEQueryCacheMatch` does NOT support `Duration` or `CpuTime` columns; adding them causes `$trace.Update()` to throw. Only add `TextData` + `EventClass` for cache match events.
+
+**Workflow:**
+1. Create trace with performance events (see reference for column compatibility)
+2. Clear cache (TMSL `clearCache`) for cold timings
+3. Execute DAX via ADOMD.NET
+4. Parse trace events: `QueryEnd` for total, `VertiPaqSEQueryEnd` for per-scan SE durations
+5. Compare cold vs warm cache to measure cache benefit
+
+**Statistical sampling:** Single measurements are noisy. Always take 6-12 samples and compare medians (not means) before and after a change. If ranges overlap significantly, the difference is likely noise. Discard the first cold-cache run as warm-up. See the reference for a `Measure-QueryMedian` helper.
+
+**Visual query profiling:** Construct SUMMARIZECOLUMNS queries from PBIR `visual.json` definitions. Column projections become group-by columns; measure projections become measure references; `Aggregation.Function` maps to SUM (0), MIN (1), MAX (2), COUNT (3), AVERAGE (4).
+
+For full setup, timing interpretation, sampling patterns, and PBIR-to-DAX translation, see [performance-profiling.md](./references/performance-profiling.md).
+
+
+## 13. Working with the Report Canvas (Desktop Bridge)
+
+The TOM connection above drives the **model**: tables, measures, relationships, roles, refresh. It cannot touch the **report canvas** (pages and visuals). Power BI Desktop exposes a second, separate local API for that: the **Desktop Bridge**, a per-process JSON-RPC server on the Windows named pipe `\\.\pipe\pbi-desktop-bridge-<PID>`. Pair the two to change the model and immediately confirm the report re-renders.
+
+When the `pbir` CLI is installed, it wraps this same pipe; prefer it over driving the pipe raw:
+
+```powershell
+pbir desktop list                                                             # PID + open file per instance
+pbir model "Report.Report" -q 'EVALUATE ROW("Check", [New Measure])'           # engine-level check
+pbir desktop refresh "Report.Report"                                          # reload on-disk PBIR into the canvas
+pbir desktop screenshot "Report.Report/Page Name.Page" -o verify.png          # inspect rendering
+```
+
+The single-quoted PowerShell argument preserves the embedded DAX quotes without a shell-specific
+stop-parsing token.
+
+Without `pbir`, drive the pipe raw from PowerShell, the same way this skill drives TOM/ADOMD. It requires the Desktop bridge **preview setting** enabled (File > Options and settings > Options > Preview features, then restart). Auto-discover the PID by enumerating the pipe directory; then over JSON-RPC: `application.state.get/v1` returns the open file path (`currentFilePath`, so the bridge can locate the PBIP on disk), `file.reload/v1` reloads the on-disk PBIR into the canvas, and `report.snapshot.capture/v1` returns a page PNG.
+
+Model-plus-report loop: edit the model with TOM and `$model.SaveChanges()` (applies live), then `reload` and `screenshot` the report to confirm visuals reflect the change (a renamed measure, a new format string, a repaired relationship). On-disk **report** (PBIR) edits are picked up by `reload`; on-disk **model** (TMDL) edits and theme files under StaticResources still need a reopen, so prefer live TOM for model changes. The bridge drives the Windows app, so on macOS run it inside the Parallels VM (see [parallels-macos.md](./references/parallels-macos.md)).
+
+For the full command set, PID selection, the JSON-RPC method surface (`bridge.manifest`, `application.state.get/v1`, `file.reload/v1`, `report.snapshot.capture/v1`), and how it complements the Analysis Services local API, see [desktop-bridge.md](./references/desktop-bridge.md). To CHANGE visuals, pages, formatting, filters, or bookmarks, route to the `pbir-cli` skill (reports plugin); the Desktop Bridge here only reloads and screenshots, it never edits the report.
+
+Alternative path (only if driving the raw pipe runs into trouble, framing, encoding, or a build that changed a param shape): use the `pbir desktop` commands (reports plugin `pbir-cli` skill), which wrap these same methods. See [desktop-bridge.md](./references/desktop-bridge.md).
 
 
 ## References
 
 **Skill references:**
 
-- [TOM Object Types CRUD](./references/tom-object-types.md) - Full create/read/update/delete examples for every object type
+- [TOM Object Types CRUD](./references/tom-object-types.md) - Full CRUD examples for every object type including UDFs, Direct Lake, KPI note
+- [Annotations and Extended Properties](./references/annotations.md) - Standard PBI annotations, Tabular Editor table groups, auto date/time, field parameters, query groups, custom annotations
+- [Calendar Column Groups](./references/calendar-column-groups.md) - Gregorian, fiscal, and ISO week-based calendar definitions via TOM; time units, primary/associated columns
+- [DAX Expression Locations](./references/dax-expressions.md) - Where DAX appears in a model: measures, calculated columns/tables, calc items, format strings, detail rows, RLS, UDFs
+- [DAX Pitfalls](./references/dax-pitfalls.md) - Deprecated/not-recommended functions, non-existent functions agents hallucinate from SQL/Python/M, common syntax mistakes, BLANK vs NULL
+- [EVALUATEANDLOG Debugging](./references/evaluateandlog-debugging.md) - Programmatic DAX debugging via TOM Trace API; capture intermediate results, cache clearing, six debugging patterns for common DAX issues
+- [Performance Profiling](./references/performance-profiling.md) - DAX Server Timings via Trace API; FE/SE time split, cold/warm cache comparison, PBIR visual-to-DAX translation, trace event column compatibility
+- [Query Listener](./references/query-listener.md) - Capture live visual DAX queries via DMV polling; interpret query structure, timings, filter patterns
+- [Export Model](./references/export-model.md) - Export to BIM/TMDL via Tabular Editor CLI, fab CLI, or TOM serializer
+- [Loading TMDL/BIM Files](./references/load-tmdl-files.md) - Load local TMDL folders or BIM files into TOM offline; inspect, modify, serialize back, deploy via fab CLI
+- [VertiPaq Statistics](./references/vertipaq-stats.md) - Column cardinality, dictionary/data size, memory by table, server timings via DMVs
 - [Refresh Model](./references/refresh-model.md) - All refresh methods (TMSL, TOM RequestRefresh, ADOMD.NET)
 - [macOS + Parallels Guide](./references/parallels-macos.md) - Connecting from macOS when PBI Desktop runs in a Parallels VM
+- [DAX Library Packages](./references/daxlib.md) - Installing reusable DAX UDF packages from daxlib.org; DaxLib.SVG, PowerofBI.IBCS, package structure, annotations
+- [Desktop Bridge (report canvas)](./references/desktop-bridge.md) - Reload + screenshot the open report canvas over the raw named-pipe JSON-RPC API (PowerShell; or the `pbir desktop` commands); pairing model (TOM) edits with report verification
+
+**CLI tools at the skill root:**
+
+- **`daxlib`** -- CLI for browsing, downloading, and installing DAX library packages from daxlib.org. Script at `daxlib.sh` (requires bash + jq). Model operations (add/update/remove) call `scripts/daxlib-tom/` via `dotnet run` (requires .NET 8 SDK). On macOS, model operations route through Parallels automatically. See [daxlib.md](./references/daxlib.md) for full command reference.
+
+**Agents:**
+
+- **`query-listener`** -- Dispatch to capture live visual DAX queries in real time; polls `DISCOVER_SESSIONS` and reports query text + timings
 
 **Example scripts in `scripts/`:**
 
@@ -563,6 +669,9 @@ To fetch full documentation pages for detailed API usage, use the `microsoft_doc
 - `query-dax.ps1` - Execute DAX queries via ADOMD.NET with formatted output
 - `refresh-table.ps1` - Refresh a table or entire model via TMSL with configurable refresh type
 - `modify-tom-objects.ps1` - Create table, rename measures, set folders/formats, hide columns, create relationship (with undo)
+- `create-field-parameter.ps1` - Create a field parameter table from a list of measures with all required metadata
+- `debug-dax.ps1` - Debug DAX with EVALUATEANDLOG trace capture and performance timings; auto-detects port, enumerates model measures, provides `Invoke-DebugQuery` helper
+- `load-tmdl.ps1` - Load a local TMDL folder or BIM file into TOM offline (no running engine), enumerate the model, optionally add a measure and save back
 - `connect-from-mac.sh` - macOS wrapper that runs PowerShell scripts in a Parallels VM via `prlctl exec`
 
 **External references:**
