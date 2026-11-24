@@ -117,7 +117,7 @@ For detailed report design guidance (layout, spacing, visual hierarchy, color, a
 | Add or modify textboxes | **`references/textbox.md`** -- paragraphs, textRuns, textStyle |
 | Sort a visual | **`references/sort-visuals.md`** -- sortDefinition inside query |
 | Sync slicers across pages | **`references/visual-json.md`** -- syncGroup (groupName, fieldChanges, filterChanges) |
-| Edit visual interactions | **`references/visual-json.md`** + **`references/page.md`** -- visualInteractions in page.json (NoFilter, Filter, Highlight) |
+| Edit visual interactions | **`references/visual-json.md`** + **`references/page.md`** -- visualInteractions in page.json (Default, DataFilter, HighlightFilter, NoFilter) |
 | Change table/matrix column widths | **`references/visual-json.md`** -- columnWidth with metadata selector |
 | Group visuals | **`references/visual-json.md`** -- visualGroup, parentGroupName, groupMode |
 | Hide visuals or fields | **`references/visual-json.md`** -- isHidden at root level, query projection control |
@@ -156,7 +156,7 @@ A report must be connected to a semantic model. There are two ways to do this:
 
 ## References
 
-**Fetching Docs:** To retrieve current Power BI developer/report format docs, use `microsoft_docs_search` + `microsoft_docs_fetch` (MCP) if available, otherwise `mslearn search` + `mslearn fetch` (CLI). Search based on the user's request and run multiple searches as needed to ensure sufficient context before proceeding.
+**Fetching Docs:** To retrieve current Power BI developer/report format docs, search https://learn.microsoft.com and fetch the relevant pages. Search based on the user's request and run multiple searches as needed to ensure sufficient context before proceeding.
 
 **Examples:**
 - **`examples/K201-MonthSlicer.Report/`** -- Real PBIR report with 7 visual types (slicer, advancedSlicerVisual, kpi, lineChart, scatterChart, tableEx, textbox), extension measures, bookmarks, conditional formatting
